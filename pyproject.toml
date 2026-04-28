@@ -1,0 +1,31 @@
+[project]
+name = "relational"
+version = "0.0.1"
+description = "CPU-scale falsification experiments for Adaptive Consistency Regularization (ACR)"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "numpy>=1.26",
+    "matplotlib>=3.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/relational"]
+
+[tool.uv]
+# Pin to CPU-only torch index to keep installs small on this Mac
+override-dependencies = []
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
