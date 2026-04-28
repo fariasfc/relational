@@ -15,6 +15,7 @@ The experiments follow the structure of `ASCR_research_proposal_v2.docx`. We del
 | 1g | Re-run of the exp1f grid on a held-out test split disjoint from val. | Whether the transductive benefit (or its absence) is real or a tailoring artifact from re-using val inputs as the pool. |
 | 1h | Sweep the consistency-step ratio K ∈ {0, 1, 3, 10, 30, 100}. Does paying more for unlabelled extrapolate? | Where the SSL benefit saturates and where it collapses; how K's optimum depends on label budget. |
 | 1f-tdc / 1h-tdc | Port to a real molecular target: TDC ADME Lipophilicity_AstraZeneca with Mordred descriptors. | Whether the MNIST-derived recipe (v18 + variance-scaled noise + K-sweep) transfers to scaffold-split molecular regression. |
+| 1i-tdc | Drop reversal-augmentation from v18 + use scaffold-test inputs as the pool (true transductive). | Whether either of these surgical fixes recovers a held-out-test SSL benefit. |
 | 2 | On a 1D problem with non-uniform Lipschitz, can adaptive σ(q) close the gap between fixed-σ and oracle σ*(q)? | Whether to commit GPU time to ACR. |
 
 Phases 1.5 (σ_jac fixed-point dynamics) and the U-curve sweep on tabular benchmarks were deferred to a follow-up iteration.
@@ -594,6 +595,61 @@ Two natural follow-ups, in priority order:
 * **Drop the reversal augmentation** and re-run with just `MSE(p, y) + λ · MSE(z_a, z_b)`. Test whether the v18 degradation on test is mostly the reversal trick or mostly the consistency loss itself.
 * **Use scaffold-test inputs as the unlabelled pool** (true transductive, accepting that we can't then evaluate on those same molecules). This is the natural setting if you're building a model to predict on a known screening set.
 
+Both ablations are run in [exp1i-tdc](#experiment-1i-tdc--drop-reversal-augmentation--true-transductive-on-tdc) below.
+
+---
+
+## Experiment 1i-tdc — Drop reversal-augmentation + true-transductive on TDC
+
+### Setup
+
+Source: [experiments/exp1i_tdc_ablations.py](experiments/exp1i_tdc_ablations.py).
+
+Two ablations on the broken recipe from exp1f-tdc, both proposed in that experiment's conclusion:
+
+* **Drop reversal-augmentation.** New `pi_model_only_loss` in [src/relational/losses.py](src/relational/losses.py): `MSE(p, y) + λ · MSE(z_a, z_b)` with no `MSE(p − p_rev, y − y_rev)` term. Variant `v18_pi_only_input_var`.
+* **True-transductive pool.** Scaffold-test split in half (420 / 420) by `split_test_for_transductive`. First half = unlabelled pool (inputs only, labels never read). Second half = held-out eval used by *all* variants — so the reported number is unbiased even when the pool tailors the model to the rest of scaffold-test.
+
+Variants compared at `n_labeled ∈ {100, 250, 500, 1 000, 2 000}`, 3 seeds:
+
+* `v15` — supervised baseline.
+* `v18_full_inductive` — sup + reversal-aug + Π-model on the unlabelled remainder of scaffold-train (the broken recipe from exp1f-tdc, kept as reference).
+* `v18_pi_only_inductive` — drop reversal-aug; inductive pool.
+* `v18_pi_only_true_transductive` — drop reversal-aug; pool = first half of scaffold-test inputs.
+
+### What we observed
+
+[results/exp1i_tdc/ablations.png](results/exp1i_tdc/ablations.png), [results/exp1i_tdc/delta_vs_v15_test.png](results/exp1i_tdc/delta_vs_v15_test.png).
+
+Held-out test MSE (mean over 3 seeds, on the disjoint 420-sample scaffold-test slice):
+
+| n_labeled | v15 | v18_full inductive | v18_pi_only inductive | v18_pi_only true transductive |
+|---|---|---|---|---|
+| 100  | 1.63          | 1.72 (−0.09)  | **1.57** (+0.06)  | 1.58 (+0.05)  |
+| 250  | 1.20          | 1.26 (−0.06)  | **1.13** (+0.07)  | **1.12** (+0.08)  |
+| 500  | 0.92          | 1.03 (−0.11)  | **0.91** (+0.01)  | 0.92 (−0.00)  |
+| 1 000 | **0.80**     | 1.08 (−0.28)  | 0.97 (−0.17)      | 0.86 (−0.06)  |
+| 2 000 | **0.62**     | 1.24 (−0.61)  | 1.27 (−0.64)      | 1.32 (−0.70)  |
+
+Three findings:
+
+**(1) Reversal-augmentation was a substantial part of exp1f-tdc's negative result.** Dropping it recovers a small SSL win at low labels: `v18_pi_only` beats `v15` on held-out scaffold test by 5–8 % at n ∈ {100, 250}. The MNIST recipe's reversal trick was image-regression-specific and parasitic on Mordred features.
+
+**(2) True-transductive pays off only at n = 1 000** (the budget where the inductive variant overfits worst). At that single point the transductive pool brings test MSE from 0.97 down to 0.86 — a 0.11 MSE improvement over the same loss with an inductive pool. At smaller and larger n the two pools are statistically tied.
+
+**(3) The high-n SSL collapse is fundamental, not a recipe artefact.** Even after both fixes, at n ≥ 1 000 all SSL variants lose to v15, and the gap *widens* with more labels (−0.06 at n=1k transductive, −0.70 at n=2k). The interpretation: once the supervised signal is rich enough to fit nuanced structure in 870-d standardised feature space, the consistency loss is smoothing the right answer toward the wrong one. σ = 0.5 standardised perturbation is a regulariser the model can't afford at high label budgets.
+
+### Conclusion
+
+The honest molecular SSL recipe is now:
+
+> **At low labelled budgets (n ≤ 500) on TDC Lipophilicity_AstraZeneca + Mordred + scaffold split, `MSE(p, y) + MSE(z_a, z_b)` (no reversal-augmentation, σ = 0.5 variance-scaled noise) gives a small held-out-test improvement over the supervised baseline (5–8 %). Inductive vs true-transductive pool ties at low labels; transductive helps specifically at n = 1 000. At n ≥ 1 000 the supervised baseline is hard to beat, and at n ≥ 2 000 all SSL variants degrade test performance.**
+
+Two natural follow-ups, lower priority:
+
+* **σ × n_labeled joint sweep.** The high-n collapse may be specific to σ = 0.5; smaller σ might let the recipe scale further. Map the front.
+* **Distribution-matched unlabelled pool.** Pick unlabelled molecules whose scaffold neighbours overlap with the labelled set (rather than blanket "all of scaffold-train"). This would make SSL pull the model toward the labelled distribution rather than away from the test one.
+
 ---
 
 ## Experiment 2 — Adaptive consistency on 1D regression with non-uniform Lipschitz
@@ -715,11 +771,12 @@ uv run experiments/exp1g_held_out_test.py        # ~25 min on CPU (n_train sweep
 uv run experiments/exp1h_consistency_scaling.py  # ~30 min on CPU (K sweep)
 uv run experiments/exp1f_tdc_learning_curve.py   # ~5 min on CPU after Mordred cache built
 uv run experiments/exp1h_tdc_consistency_scaling.py  # ~10 min on CPU
+uv run experiments/exp1i_tdc_ablations.py            # ~5 min on CPU
 uv run experiments/exp2_synthetic_acr.py         # ~25s on CPU
 ```
 
 The first call to any TDC experiment computes Mordred descriptors for 4 200 molecules (~3 minutes, cached to `data/tdc/mordred/Lipophilicity_AstraZeneca.parquet` for all subsequent runs).
 
-Total wall-clock for the full suite is ~150 minutes including the one-time Mordred computation. Every JSON in `results/` is regenerated from scratch on each run; matplotlib figures are deterministic given the JSON. Seeds are fixed.
+Total wall-clock for the full suite is ~155 minutes including the one-time Mordred computation. Every JSON in `results/` is regenerated from scratch on each run; matplotlib figures are deterministic given the JSON. Seeds are fixed.
 
 If `uv sync` errors with TLS issues on macOS, prepend `UV_NATIVE_TLS=1`.

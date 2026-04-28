@@ -18,6 +18,7 @@ from .losses import (
     lambda_rampup,
     noisy_pdf_loss,
     original_pdf_loss,
+    pi_model_only_loss,
     pi_model_pdf_loss,
     supervised_mse_loss,
 )
@@ -82,6 +83,11 @@ _PDF_VARIANTS = {
     # anything beyond standard consistency).
     "v18_pi_input", "v18_pi_input_var",
     "v18_pi_emb", "v18_pi_emb_var",
+    # v18 ablations that drop reversal-augmentation entirely. Used by
+    # exp1i-tdc — on Mordred features reversal-aug actively hurts, so we
+    # need a "pure Π-model" comparison that isolates the consistency term.
+    "v18_pi_only_input", "v18_pi_only_input_var",
+    "v18_pi_only_emb", "v18_pi_only_emb_var",
 }
 
 
@@ -125,7 +131,10 @@ def run_pdf_experiment(
     """
     if variant not in _PDF_VARIANTS:
         raise ValueError(f"unknown variant {variant}")
-    if variant in ("v17_input_var", "v18_pi_input_var") and input_noise_scale is None:
+    if (
+        variant in ("v17_input_var", "v18_pi_input_var", "v18_pi_only_input_var")
+        and input_noise_scale is None
+    ):
         raise ValueError(f"{variant} requires input_noise_scale")
 
     seed_everything(seed)
@@ -181,6 +190,15 @@ def run_pdf_experiment(
                 t_x = transductive_pool[idx]
                 if variant.startswith("v17_"):
                     loss, _ = noisy_pdf_loss(
+                        model, x, y,
+                        transductive_x=t_x,
+                        noise_std=noise_std,
+                        noise_space=space,
+                        noise_scale=scale,
+                        generator=g_noise,
+                    )
+                elif variant.startswith("v18_pi_only_"):
+                    loss, _ = pi_model_only_loss(
                         model, x, y,
                         transductive_x=t_x,
                         noise_std=noise_std,

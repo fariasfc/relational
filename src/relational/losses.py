@@ -163,6 +163,52 @@ def consistency_only_loss(
     return F.mse_loss(z_a, z_b)
 
 
+def pi_model_only_loss(
+    model: nn.Module,
+    x: Tensor,
+    y: Tensor,
+    transductive_x: Tensor,
+    *,
+    noise_std: float,
+    noise_space: str = "input",
+    noise_scale: Tensor | None = None,
+    pi_weight: float = 1.0,
+    generator: torch.Generator | None = None,
+) -> Tuple[Tensor, dict]:
+    """Pure supervised + Π-model consistency on unlabelled q. No reversal-augmentation.
+
+    Used by exp1i-tdc to ablate reversal-augmentation off the v18 recipe.
+    Reversal-aug worked on MNIST regression because the batch-flipped pair
+    has a meaningful summed/differenced label structure across pixel
+    space; on Mordred descriptors the flipped pair has no such structure
+    and v16 (the reversal-aug-only baseline) actively hurts.
+
+        L = MSE(p, y)  +  pi_weight · MSE(z_a, z_b)
+
+    where ``z_{a,b} = f(q + ε_{a,b})`` and the noise process matches
+    :func:`pi_model_pdf_loss` so the comparison is clean.
+    """
+    n = x.shape[0]
+    y = y.to(dtype=torch.float32).view(n, 1)
+    x = x.view(n, -1)
+    preds = model(x)
+
+    z_a, z_b = _two_noisy_forwards(
+        model, transductive_x,
+        noise_std=noise_std, noise_space=noise_space,
+        noise_scale=noise_scale, generator=generator,
+    )
+
+    sup = F.mse_loss(preds, y)
+    pi = F.mse_loss(z_a, z_b)
+    total = sup + pi_weight * pi
+    parts = {
+        "supervised": sup.detach().item(),
+        "pi_model_consistency": (pi_weight * pi).detach().item(),
+    }
+    return total, parts
+
+
 def pi_model_pdf_loss(
     model: nn.Module,
     x: Tensor,

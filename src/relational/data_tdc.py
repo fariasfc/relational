@@ -237,6 +237,38 @@ def tdc_loaders(
     return train_loader, val_loader, test_loader
 
 
+def split_test_for_transductive(
+    test: TDCSplit, n_pool: int = 420, seed: int = 0
+) -> Tuple[TDCSplit, TDCSplit]:
+    """Split scaffold-test in half: first part = transductive unlabelled
+    pool (inputs only, labels never read), second part = held-out eval.
+
+    Used by exp1i-tdc to test the *true-transductive* setting — the model
+    sees the inputs of the molecules it will later be evaluated on at
+    training time, but not their labels. Held-out eval portion is a
+    completely separate slice of the scaffold-test set, so the reported
+    test number is unbiased even when the pool tailors the model to the
+    rest of scaffold-test."""
+    n = test.X.shape[0]
+    if n_pool >= n:
+        raise ValueError(f"n_pool={n_pool} must be < scaffold-test size {n}")
+    g = torch.Generator().manual_seed(seed)
+    perm = torch.randperm(n, generator=g)
+    pool_idx = perm[:n_pool]
+    eval_idx = perm[n_pool:]
+    pool = TDCSplit(
+        X=test.X[pool_idx],
+        y=test.y[pool_idx],  # kept but never read
+        smiles=[test.smiles[i] for i in pool_idx.tolist()],
+    )
+    eval_set = TDCSplit(
+        X=test.X[eval_idx],
+        y=test.y[eval_idx],
+        smiles=[test.smiles[i] for i in eval_idx.tolist()],
+    )
+    return pool, eval_set
+
+
 def subsample_train(
     train: TDCSplit, n_labeled: int, seed: int = 0
 ) -> Tuple[TDCSplit, TDCSplit]:
