@@ -2,12 +2,21 @@
 name = "relational"
 version = "0.0.1"
 description = "CPU-scale falsification experiments for Adaptive Consistency Regularization (ACR)"
-requires-python = ">=3.10"
+# pyTDC pulls mysql-connector-python which only ships wheels for cp310/cp311,
+# and rdkit + mordredcommunity also support those. Pin to 3.11 so the stack
+# resolves cleanly.
+requires-python = ">=3.10,<3.12"
 dependencies = [
     "torch>=2.2",
     "torchvision>=0.17",
     "numpy>=1.26",
     "matplotlib>=3.8",
+    # Molecular data + descriptors
+    "pyTDC>=1.0",
+    # pyTDC pins rdkit < 2024.3, so we follow it.
+    "rdkit>=2023.9.5,<2024.3",
+    "mordredcommunity>=2.0",
+    "pandas>=2.0",
 ]
 
 [build-system]

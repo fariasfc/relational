@@ -14,6 +14,7 @@ The experiments follow the structure of `ASCR_research_proposal_v2.docx`. We del
 | 1f | Learning curve over `n_train ∈ {50…5 000}` and head-to-head between *inductive* (separate unlabelled pool) and *transductive* (val-set inputs as pool). | Where SSL helps most on the labelled-budget axis, and whether knowing the eval inputs in advance helps. |
 | 1g | Re-run of the exp1f grid on a held-out test split disjoint from val. | Whether the transductive benefit (or its absence) is real or a tailoring artifact from re-using val inputs as the pool. |
 | 1h | Sweep the consistency-step ratio K ∈ {0, 1, 3, 10, 30, 100}. Does paying more for unlabelled extrapolate? | Where the SSL benefit saturates and where it collapses; how K's optimum depends on label budget. |
+| 1f-tdc / 1h-tdc | Port to a real molecular target: TDC ADME Lipophilicity_AstraZeneca with Mordred descriptors. | Whether the MNIST-derived recipe (v18 + variance-scaled noise + K-sweep) transfers to scaffold-split molecular regression. |
 | 2 | On a 1D problem with non-uniform Lipschitz, can adaptive σ(q) close the gap between fixed-σ and oracle σ*(q)? | Whether to commit GPU time to ACR. |
 
 Phases 1.5 (σ_jac fixed-point dynamics) and the U-curve sweep on tabular benchmarks were deferred to a follow-up iteration.
@@ -518,6 +519,83 @@ Extrapolating K is genuinely beneficial up to a problem-dependent optimum, and b
 
 ---
 
+## Experiment 1f-tdc / 1h-tdc — Port to TDC Lipophilicity_AstraZeneca + Mordred
+
+### Setup
+
+Sources: [experiments/exp1f_tdc_learning_curve.py](experiments/exp1f_tdc_learning_curve.py), [experiments/exp1h_tdc_consistency_scaling.py](experiments/exp1h_tdc_consistency_scaling.py).
+
+The whole point of this port is whether the MNIST-derived recipe transfers to a real molecular regression task. Same loss code (`v15`, `v16`, `v18_pi_input_var`, K-sweep) — only the data layer and model change.
+
+* **Task**: TDC ADME Lipophilicity_AstraZeneca, regression target (logD-like), canonical scaffold split (train 2 940 / val 420 / test 840).
+* **Features**: Mordred 2D descriptors, ~870 dimensions after dropping NaN/zero-variance columns. Standardised on the full dataset.
+* **Model**: TabularMLP — `Linear(870, 256) → ReLU → Dropout(0.1) → Linear(256, 32) → Linear(32, 1)`. Same encoder/head split as PDFRegressor.
+* **Training**: 50 epochs, batch 64, Adam lr 1e-3, σ = 0.5 variance-scaled (post-standardisation per-feature std).
+* **Variants**:
+  * `v15` — supervised
+  * `v16` — sup + 2× reversal-augmentation
+  * `v18_inductive` — sup + reversal-aug + Π-model with the unlabelled remainder of scaffold-train as the pool
+  * `v18_transductive` — same loss, pool = val-set inputs
+  * For exp1h-tdc: `v18_inductive` with K ∈ {0, 1, 3, 10, 30, 100}
+* **Reporting**: `val_mse_best` (in-domain, biased) and `test_mse_at_best_val_epoch` (held-out scaffold-test, unbiased).
+
+### What we expected
+
+Same shape as MNIST: SSL benefit large at moderate `n_labeled`, narrowing at extremes; K U-shape with budget-dependent optimum; transductive ≥ inductive at low labels.
+
+### What we observed
+
+[results/exp1f_tdc/learning_curve.png](results/exp1f_tdc/learning_curve.png), [results/exp1f_tdc/transductive_vs_inductive_test.png](results/exp1f_tdc/transductive_vs_inductive_test.png), [results/exp1h_tdc/k_sweep.png](results/exp1h_tdc/k_sweep.png).
+
+**Learning curve** (val / test MSE, mean over 3 seeds):
+
+| n_labeled | v15 (val/test) | v16 (val/test) | v18_inductive (val/test) | v18_transductive (val/test) |
+|---|---|---|---|---|
+| 50  | 1.91 / 1.99 | 1.84 / 1.97 | 1.89 / 1.94 | 1.89 / 1.93 |
+| 100 | 1.43 / 1.66 | 1.47 / 1.66 | 1.42 / 1.60 | 1.50 / 1.66 |
+| 250 | 1.09 / 1.20 | 1.13 / 1.22 | 1.12 / 1.16 | 1.14 / 1.26 |
+| 500 | 0.87 / 0.88 | 0.90 / 0.89 | 0.94 / 1.01 | 0.92 / 0.99 |
+| 1000 | **0.68 / 0.75** | 0.76 / 0.82 | 0.70 / 0.92 | 0.71 / **1.17** |
+| 2000 | **0.59 / 0.60** | 0.66 / 0.70 | 0.57 / **1.07** | 0.59 / **1.25** |
+
+**K-sweep at n=1 000** ([results/exp1h_tdc/k_sweep.png](results/exp1h_tdc/k_sweep.png), val_best / test):
+
+| K | v15 ref | K=0 | K=1 | K=3 | K=10 | K=30 |
+|---|---|---|---|---|---|---|
+| val | **0.69** | 0.71 | 0.71 | 0.71 | 0.77 | 0.86 |
+| test | — | 0.92 | 1.03 | 1.14 | 1.16 | 0.89 |
+
+Three findings, all *different* from MNIST:
+
+**(1) Val curves track each other; test curves diverge sharply.** On the in-domain val set, v15/v16/v18 all reach roughly the same MSE at every budget. On the scaffold-test set, **v15 keeps improving with more labels while v18 flattens and *reverses*** — at n=2 000 v15 hits 0.60 while v18_inductive sits at 1.07 and v18_transductive at 1.25. The MNIST recipe overfits to the unlabelled-pool distribution, which under scaffold split is *not* the test distribution.
+
+**(2) Transductive is the *worst* variant at n ≥ 500**, in direct opposition to the MNIST result. Inductive − transductive on test grows monotonically negative (transductive gets worse) with budget; at n=1 000 transductive is 0.25 MSE worse than inductive on held-out test. Tailoring to val inputs under scaffold split is exactly the wrong move — val and test come from different scaffold groups, so the model that fits val inputs hardest generalises *worst* to test.
+
+**(3) v16 (reversal-augmentation alone) hurts on TDC** — consistently 0.05–0.10 MSE worse than v15 on test at n ≥ 500. Reversal augmentation worked on MNIST because flipping the batch produces digit pairs whose summed/differenced labels are still a meaningful regression target with a smooth structure across the pixel space. On Mordred descriptors there is no such smooth structure linking arbitrary molecule pairs — the trick is brittle outside the image-regression domain it was found in.
+
+**K-sweep**: at n=1 000, the K-optimum for held-out test is K=0 (test=0.92), not K=10 (test=1.16). The familiar drift signature is still there (final >> best at large K) but K=30 looks "good" on test only because the model has approached a near-constant prediction whose error is dominated by output variance, not bias. At n=250 there is a small K=10 optimum on test (1.14 vs v15 ≈ 1.20) — the SSL benefit *is* present at the lowest budget but is much smaller than on MNIST and disappears as soon as labelled data accumulates.
+
+### Conclusion
+
+The SSL recipe that worked on MNIST does *not* transfer cleanly to TDC Lipophilicity_AstraZeneca under scaffold split. Three reasons we can identify:
+
+1. **Distribution shift between train and scaffold-test.** SSL on the unlabelled-train pool biases the model toward train-distribution smoothness, which is not the right inductive bias when test molecules come from held-out scaffolds. **The val-test gap on the SSL variants is several times larger than on the supervised baseline** — a classic OOD-overfitting signature.
+
+2. **Reversal augmentation is image-regression-specific.** It assumes a smooth latent structure connecting arbitrary input pairs to their summed/differenced targets. Mordred features do not have that structure; the trick is parasitic noise here.
+
+3. **Variance-scaled noise on standardised Mordred features ≈ isotropic on a unit sphere.** Standardisation already equalised per-feature variances, so the variance-scaling refinement has no signal to exploit (unlike on MNIST where 24 % of pixels were always-background). The σ=0.5 perturbation in 870-d standardised space is large in raw-feature terms — an unintended aggressive regulariser.
+
+This is a *useful negative result.* The honest version of the molecular SSL recipe is now:
+
+> **For tabular molecular regression under scaffold split, the supervised baseline on standardised Mordred + a dropout-MLP is hard to beat.** Adding consistency over the unlabelled training pool produces a model that's better on val (in-domain) but materially worse on scaffold-test (OOD). If you want to use SSL in this setting, your unlabelled pool must match the deployment distribution — and on a leaderboard with a held-out scaffold-test, no in-distribution unlabelled pool is available.
+
+Two natural follow-ups, in priority order:
+
+* **Drop the reversal augmentation** and re-run with just `MSE(p, y) + λ · MSE(z_a, z_b)`. Test whether the v18 degradation on test is mostly the reversal trick or mostly the consistency loss itself.
+* **Use scaffold-test inputs as the unlabelled pool** (true transductive, accepting that we can't then evaluate on those same molecules). This is the natural setting if you're building a model to predict on a known screening set.
+
+---
+
 ## Experiment 2 — Adaptive consistency on 1D regression with non-uniform Lipschitz
 
 ### Setup
@@ -635,9 +713,13 @@ uv run experiments/exp1e_matched_steps.py        # ~12 min on CPU (matched-step 
 uv run experiments/exp1f_learning_curve.py       # ~22 min on CPU (n_train sweep, in-domain)
 uv run experiments/exp1g_held_out_test.py        # ~25 min on CPU (n_train sweep, held-out)
 uv run experiments/exp1h_consistency_scaling.py  # ~30 min on CPU (K sweep)
+uv run experiments/exp1f_tdc_learning_curve.py   # ~5 min on CPU after Mordred cache built
+uv run experiments/exp1h_tdc_consistency_scaling.py  # ~10 min on CPU
 uv run experiments/exp2_synthetic_acr.py         # ~25s on CPU
 ```
 
-Total wall-clock for the full suite is ~130 minutes. Every JSON in `results/` is regenerated from scratch on each run; matplotlib figures are deterministic given the JSON. Seeds are fixed.
+The first call to any TDC experiment computes Mordred descriptors for 4 200 molecules (~3 minutes, cached to `data/tdc/mordred/Lipophilicity_AstraZeneca.parquet` for all subsequent runs).
+
+Total wall-clock for the full suite is ~150 minutes including the one-time Mordred computation. Every JSON in `results/` is regenerated from scratch on each run; matplotlib figures are deterministic given the JSON. Seeds are fixed.
 
 If `uv sync` errors with TLS issues on macOS, prepend `UV_NATIVE_TLS=1`.

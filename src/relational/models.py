@@ -53,3 +53,38 @@ class TinyMLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
+
+
+class TabularMLP(nn.Module):
+    """MLP for tabular molecular regression (Mordred / fingerprint inputs).
+
+    Same encoder/head split as :class:`PDFRegressor` so that embedding-space
+    noise variants of v17/v18 (``noise_space="embedding"``) work without
+    further changes. Defaults sized for a few-thousand-sample regime with
+    ~1 000 input features, with mild dropout on the encoder for
+    regularisation against overfitting on the high-dim Mordred space.
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        hidden: int = 256,
+        bottleneck: int = 32,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(in_dim, hidden),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden, bottleneck),
+        )
+        self.head = nn.Linear(bottleneck, 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.head(self.encoder(x))
+
+    def forward_with_emb_noise(
+        self, x: torch.Tensor, noise: torch.Tensor
+    ) -> torch.Tensor:
+        return self.head(self.encoder(x) + noise)

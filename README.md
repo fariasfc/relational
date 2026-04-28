@@ -19,10 +19,12 @@ uv run experiments/exp1e_matched_steps.py
 uv run experiments/exp1f_learning_curve.py
 uv run experiments/exp1g_held_out_test.py
 uv run experiments/exp1h_consistency_scaling.py
+uv run experiments/exp1f_tdc_learning_curve.py
+uv run experiments/exp1h_tdc_consistency_scaling.py
 uv run experiments/exp2_synthetic_acr.py
 ```
 
-Outputs land in `results/exp{0,1,1b,1c,1e,1f,1g,1h,2}/`. See [EXPERIMENTS.md](EXPERIMENTS.md) for the full design / observations / conclusions.
+Outputs land in `results/exp{0,1,1b,1c,1e,1f,1g,1h,1f_tdc,1h_tdc,2}/`. See [EXPERIMENTS.md](EXPERIMENTS.md) for the full design / observations / conclusions.
 
 ## What we are testing
 
@@ -34,4 +36,5 @@ Outputs land in `results/exp{0,1,1b,1c,1e,1f,1g,1h,2}/`. See [EXPERIMENTS.md](EX
 - **exp1f** — Learning curve over `n_train ∈ {50…5 000}` and head-to-head between *inductive* (separate unlabelled pool) and *transductive* (val-set inputs as pool).
 - **exp1g** — Re-run of exp1f on a held-out test split disjoint from val. Reports both the in-domain val number and the unbiased test number; rules out tailoring artifact for transductive variants.
 - **exp1h** — Sweep the consistency-step ratio `K ∈ {0, 1, 3, 10, 30, 100}` to find where extra unlabelled-only updates stop helping and start collapsing the model.
+- **exp1f-tdc / exp1h-tdc** — Port the recipe to TDC ADME Lipophilicity_AstraZeneca with Mordred descriptors. Tests whether the MNIST recipe transfers to a real molecular regression task under scaffold split.
 - **exp2** — On a 1D regression with 5× Lipschitz contrast (`y = sin(x)` on `[0, π]`, `y = 5·sin(x)` on `[π, 2π]`), compares supervised, fixed-σ Π-model, σ_jac, σ_dens, and oracle σ*(q). Pass: at least one adaptive variant closes ≥40% of the (fixed-σ → oracle) gap in-distribution and ≥60% under shift.
